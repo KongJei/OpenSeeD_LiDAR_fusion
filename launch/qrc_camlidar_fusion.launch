@@ -17,6 +17,10 @@
     <param name="max_var"    type="double" value="100.0" />
     <param name="filter_output_pc"    type="bool" value="false" />
 
+    <param name="imgWidth" type="int" value="640" />
+    <param name="imgHeight" type="int" value="480" />
+    <param name="syncTime" type="double" value="1.0" /> 
+
     <param name="/lidar/fov_up"        type="double" value="90.0" />
     <param name="/lidar/fov_down"        type="double" value="-90.0" />
     <param name="/lidar/vert_scan"        type="int" value="128" />

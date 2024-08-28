@@ -13,6 +13,8 @@
 #include <opencv2/core/core.hpp>
 #include <iostream>
 #include <math.h>
+#include <vector>
+#include <deque>
 
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/PointCloud2.h>
@@ -106,6 +108,25 @@ pcl::RangeImage::CoordinateFrame coordinate_frame = pcl::RangeImage::LASER_FRAME
 
 std::vector<cv::Vec3b> color_map;
 
+
+// std::deque<arma::mat> Z_matrices;
+// std::deque<arma::mat> Zz_matrices;
+std::deque<arma::mat> ZI_matrices;
+std::deque<arma::mat> ZzI_matrices;
+std::deque<arma::mat> Zout_matrices;
+
+std::deque<cv::Mat> semseg_labeled_imgs;
+std::deque<cv::Mat> color_labeled_imgs;
+// std::deque<PointCloud::Ptr> point_clouds;
+
+std::deque<ros::Time> img_timestamps;
+std::deque<ros::Time> pc_timestamps;
+
+int imgWidth, imgHeight; // assume not change
+double syncTime;
+
+
+
 float getRange(pcl::PointXYZI point)
 {
   return sqrt(point.x * point.x + point.y * point.y + point.z * point.z);
@@ -157,48 +178,45 @@ void imgCallback(const sensor_msgs::ImageConstPtr& in_image)
 {
   ROS_INFO("semantic segmented img received!!!-------");
 
+  cv_bridge::CvImagePtr cv_ptr;
+  try
+  {
+      cv_ptr = cv_bridge::toCvCopy(in_image, sensor_msgs::image_encodings::MONO8);
+      cv::Mat semseg_labeled_img = cv_ptr->image;
+
+      // color_labeled_img = cv::Mat(semseg_labeled_img.size(), CV_8UC3, cv::Scalar(0, 0, 0));
+      cv::Mat color_labeled_img(semseg_labeled_img.size(), CV_8UC3, cv::Scalar(0, 0, 0));
+      for (int y = 0; y < semseg_labeled_img.rows; ++y) {
+          for (int x = 0; x < semseg_labeled_img.cols; ++x) {
+              int label = semseg_labeled_img.at<int>(y, x);
+              if (label < color_map.size()) {
+                  color_labeled_img.at<cv::Vec3b>(y, x) = color_map[label];
+                  // std::cout<<"label :     "<<label<<"-----------"<<std::endl;
+              } else {
+                  color_labeled_img.at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 0); // 레이블이 색상 맵의 범위를 벗어난 경우 검정색으로 설정
+              }
+          }
+      }
+
+      semseg_labeled_imgs.push_back(semseg_labeled_img);
+      color_labeled_imgs.push_back(color_labeled_img);
+      img_timestamps.push_back(in_image->header.stamp);
+
+      pcOnimg_pub.publish(cv_ptr->toImageMsg());
+
+  }
+  catch (cv_bridge::Exception& e)
+  {
+      ROS_ERROR("cv_bridge exception: %s", e.what());
+      return;
+  }
+
 
 }
 
 void pcCallback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2)
 {
   ROS_INFO("pointcloud received!!!-----------------");
-}
-
-void callback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2 , const sensor_msgs::ImageConstPtr& in_image)
-{
-    
-    ROS_INFO("----0000000--------");
-    cv_bridge::CvImagePtr cv_ptr , color_pcl;
-    cv::Mat semseg_labeled_img, color_labeled_img;
-    ROS_INFO("----111111--------");
-        try
-        { 
-          ROS_INFO("----22222--------");
-          // cv_ptr = cv_bridge::toCvCopy(in_image, sensor_msgs::image_encodings::BGR8);
-          cv_ptr = cv_bridge::toCvCopy(in_image, sensor_msgs::image_encodings::MONO8);
-          semseg_labeled_img = cv_ptr->image;
-          // color_pcl = cv_bridge::toCvCopy(in_image, sensor_msgs::image_encodings::BGR8);
-
-          color_labeled_img = cv::Mat(semseg_labeled_img.size(), CV_8UC3, cv::Scalar(0, 0, 0));
-          // cv::Mat color_labeled_img(semseg_labeled_img.size(), CV_8UC3, cv::Scalar(0, 0, 0));
-          for (int y = 0; y < semseg_labeled_img.rows; ++y) {
-              for (int x = 0; x < semseg_labeled_img.cols; ++x) {
-                  uint8_t label = semseg_labeled_img.at<uint8_t>(y, x);
-                  if (label < color_map.size()) {
-                      color_labeled_img.at<cv::Vec3b>(y, x) = color_map[label];
-                      std::cout<<"label :     "<<label<<"-----------"<<std::endl;
-                  } else {
-                      color_labeled_img.at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 0); // 레이블이 색상 맵의 범위를 벗어난 경우 검정색으로 설정
-                  }
-              }
-          }
-        }
-        catch (cv_bridge::Exception& e)
-        {
-          ROS_ERROR("cv_bridge exception: %s", e.what());
-          return;
-        }
 
   //Conversion from sensor_msgs::PointCloud2 to pcl::PointCloud<T>
   pcl::PCLPointCloud2 pcl_pc2;
@@ -206,15 +224,15 @@ void callback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2 , 
   PointCloud::Ptr msg_pointCloud(new PointCloud);
   pcl::fromPCLPointCloud2(pcl_pc2,*msg_pointCloud);
   ///
-  if (save_synced_)
-  {
-    std::string save_path = "/home/se0yeon00/kaistRX_ws/src/lidar-camera-fusion/";
-    std::string img_path = save_path + "cam/" + std::to_string(save_count) + ".png";
-    std::string pc_path = save_path + "lidar/" + std::to_string(save_count) + ".pcd";
-    cv::imwrite(img_path, cv_ptr->image);
-    pcl::io::savePCDFileASCII(pc_path, *msg_pointCloud);
-    save_count++;
-  }
+  // if (save_synced_)
+  // {
+  //   std::string save_path = "/home/se0yeon00/kaistRX_ws/src/lidar-camera-fusion/";
+  //   std::string img_path = save_path + "cam/" + std::to_string(save_count) + ".png";
+  //   std::string pc_path = save_path + "lidar/" + std::to_string(save_count) + ".pcd";
+  //   cv::imwrite(img_path, cv_ptr->image);
+  //   pcl::io::savePCDFileASCII(pc_path, *msg_pointCloud);
+  //   save_count++;
+  // }
   ////// filter point cloud 
   if (msg_pointCloud == NULL) return;
 
@@ -313,21 +331,7 @@ void callback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2 , 
   arma::mat ZzI;
 
   arma::interp2(X, Y, Z, XI, YI, ZI,"lineal");  
-  arma::interp2(X, Y, Zz, XI, YI, ZzI,"lineal");  
-
-  //===========================================fin filtrado por imagen=================================================
-  /////////////////////////////
-
-  // reconstruccion de imagen a nube 3D
-  //============================================================================================================
-  
-
-  PointCloud::Ptr point_cloud (new PointCloud);
-  PointCloud::Ptr cloud (new PointCloud);
-  point_cloud->width = ZI.n_cols; 
-  point_cloud->height = ZI.n_rows;
-  point_cloud->is_dense = false;
-  point_cloud->points.resize(point_cloud->width * point_cloud->height);
+  arma::interp2(X, Y, Zz, XI, YI, ZzI,"lineal");
 
   arma::mat Zout = ZI;
   
@@ -376,139 +380,207 @@ void callback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2 , 
             Zout((i*interpol_value)+m,j) = 0;                 
       }   
     ZI = Zout;
-  }
+  }  
 
-  ///////// imagen de rango a nube de puntos  
-  int num_pc = 0; 
-  for (uint i=0; i< ZI.n_rows - interpol_value; i+=1)
-   {       
-      for (uint j=0; j<ZI.n_cols ; j+=1)
-      {
+  ZI_matrices.push_back(ZI);
+  ZzI_matrices.push_back(ZzI);
+  Zout_matrices.push_back(Zout);
+  pc_timestamps.push_back(in_pc2->header.stamp);
 
-        float ang = M_PI-((2.0 * M_PI * j )/(ZI.n_cols));
-
-        if (ang < min_FOV-M_PI/2.0|| ang > max_FOV - M_PI/2.0) 
-          continue;
-
-        if(!(Zout(i,j)== 0 ))
-        {  
-          float pc_modulo = Zout(i,j);
-          float pc_x = sqrt(pow(pc_modulo,2)- pow(ZzI(i,j),2)) * cos(ang);
-          float pc_y = sqrt(pow(pc_modulo,2)- pow(ZzI(i,j),2)) * sin(ang);
-
-          float ang_x_lidar = 0.6*M_PI/180.0;  
-
-          Eigen::MatrixXf Lidar_matrix(3,3); //matrix  transformation between lidar and range image. It rotates the angles that it has of error with respect to the ground
-          Eigen::MatrixXf result(3,1);
-          Lidar_matrix <<   cos(ang_x_lidar) ,0                ,sin(ang_x_lidar),
-                            0                ,1                ,0,
-                            -sin(ang_x_lidar),0                ,cos(ang_x_lidar) ;
-
-
-          result << pc_x,
-                    pc_y,
-                    ZzI(i,j);
-          
-          result = Lidar_matrix*result;  // rotacion en eje X para correccion
-
-          point_cloud->points[num_pc].x = result(0);
-          point_cloud->points[num_pc].y = result(1);
-          point_cloud->points[num_pc].z = result(2);
-
-          cloud->push_back(point_cloud->points[num_pc]); 
-
-          num_pc++;
-        }
-      }
-   }  
-
-  //============================================================================================================
-
-   PointCloud::Ptr P_out (new PointCloud);
- 
-
-  P_out = cloud;
-
-
-  Eigen::MatrixXf RTlc(4,4); // translation matrix lidar-camera
-  RTlc<<   Rlc(0), Rlc(3) , Rlc(6) ,Tlc(0)
-          ,Rlc(1), Rlc(4) , Rlc(7) ,Tlc(1)
-          ,Rlc(2), Rlc(5) , Rlc(8) ,Tlc(2)
-          ,0       , 0        , 0  , 1    ;
-
-  //std::cout<<RTlc<<std::endl;
-
-  int size_inter_Lidar = (int) P_out->points.size();
-
-  Eigen::MatrixXf Lidar_camera(3,size_inter_Lidar);
-  Eigen::MatrixXf Lidar_cam(3,1);
-  Eigen::MatrixXf pc_matrix(4,1);
-  Eigen::MatrixXf pointCloud_matrix(4,size_inter_Lidar);
-
-  unsigned int cols = in_image->width;
-  unsigned int rows = in_image->height;
-
-  uint px_data = 0; uint py_data = 0;
-
-
-  pcl::PointXYZRGB point;
-
-  pcl::PointCloud<pcl::PointXYZRGB>::Ptr pc_color (new pcl::PointCloud<pcl::PointXYZRGB>);
-
-   //P_out = cloud_out;
-
-  for (int i = 0; i < size_inter_Lidar; i++)
-  {
-      pc_matrix(0,0) = -P_out->points[i].y;   
-      pc_matrix(1,0) = -P_out->points[i].z;   
-      pc_matrix(2,0) =  P_out->points[i].x;  
-      pc_matrix(3,0) = 1.0;
-
-      Lidar_cam = Mc * (RTlc * pc_matrix);
-
-      px_data = (int)(Lidar_cam(0,0)/Lidar_cam(2,0));
-      py_data = (int)(Lidar_cam(1,0)/Lidar_cam(2,0));
-      
-      if(px_data<0.0 || px_data>=cols || py_data<0.0 || py_data>=rows)
-          continue;
-
-      int color_dis_x = (int)(255*((P_out->points[i].x)/maxlen));
-      int color_dis_z = (int)(255*((P_out->points[i].x)/10.0));
-      if(color_dis_z>255)
-          color_dis_z = 255;
-
-
-      //point cloud con color
-      // cv::Vec3b & color = color_pcl->image.at<cv::Vec3b>(py_data,px_data);
-      cv::Vec3b & color = color_labeled_img.at<cv::Vec3b>(py_data,px_data);
-      
-      point.x = P_out->points[i].x;
-      point.y = P_out->points[i].y;
-      point.z = P_out->points[i].z;
-      
-
-      point.r = (int)color[2]; 
-      point.g = (int)color[1]; 
-      point.b = (int)color[0];
-
-      
-      pc_color->points.push_back(point);   
-      
-      // cv::circle(cv_ptr->image, cv::Point(px_data, py_data), 1, CV_RGB(255-color_dis_x,(int)(color_dis_z),color_dis_x),cv::FILLED);
-      cv::circle(semseg_labeled_img, cv::Point(px_data, py_data), 1, CV_RGB(255-color_dis_x,(int)(color_dis_z),color_dis_x),cv::FILLED);
-    }
-    sensor_msgs::PointCloud2::Ptr pc_color_msg(new sensor_msgs::PointCloud2);
-    pc_color->is_dense = true;
-    pc_color->width = (int) pc_color->points.size();
-    pc_color->height = 1;
-    pc_color->header.frame_id = "base_imu_link";
-    pcl::toROSMsg(*pc_color, *pc_color_msg);
-    pc_color_msg->header.stamp = in_pc2->header.stamp;
-
-
-  pcOnimg_pub.publish(cv_ptr->toImageMsg());
-  pc_pub.publish(pc_color_msg);
+  
   range_image_pub.publish(cv_range_image->toImageMsg());
+}
+
+// void callback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2 , const sensor_msgs::ImageConstPtr& in_image)
+// {
+    
+void reconstruct3D()
+{
+  //===========================================fin filtrado por imagen=================================================
+  /////////////////////////////
+
+  // reconstruccion de imagen a nube 3D
+  //============================================================================================================
+  while (!semseg_labeled_imgs.empty())
+    {
+      if (ZI_matrices.empty()) continue;
+
+      ros::Time img_time = img_timestamps.front();
+
+      auto it = std::find_if(pc_timestamps.begin(), pc_timestamps.end(), 
+          [&](const ros::Time& pc_time) {
+              return fabs((img_time - pc_time).toSec()) < syncTime;
+        });
+
+      if (it != pc_timestamps.end())
+      {
+        auto idx = std::distance(pc_timestamps.begin(), it);
+
+        //--- origin code----
+        PointCloud::Ptr point_cloud (new PointCloud);
+        PointCloud::Ptr cloud (new PointCloud);
+
+        arma::mat Zi = ZI_matrices[idx]; 
+        arma::mat ZOut = Zout_matrices[idx];
+        arma::mat Zzi = ZzI_matrices[idx];
+
+        point_cloud->width = Zi.n_cols; 
+        point_cloud->height = Zi.n_rows;
+        point_cloud->is_dense = false;
+        point_cloud->points.resize(point_cloud->width * point_cloud->height);
+
+
+
+        ///////// imagen de rango a nube de puntos  
+        int num_pc = 0; 
+        for (uint i=0; i< Zi.n_rows - interpol_value; i+=1)
+        {       
+            for (uint j=0; j<Zi.n_cols ; j+=1)
+            {
+
+              float ang = M_PI-((2.0 * M_PI * j )/(Zi.n_cols));
+
+              if (ang < min_FOV-M_PI/2.0|| ang > max_FOV - M_PI/2.0) 
+                continue;
+
+              if(!(ZOut(i,j)== 0 ))
+              {  
+                float pc_modulo = ZOut(i,j);
+                float pc_x = sqrt(pow(pc_modulo,2)- pow(Zzi(i,j),2)) * cos(ang);
+                float pc_y = sqrt(pow(pc_modulo,2)- pow(Zzi(i,j),2)) * sin(ang);
+
+                float ang_x_lidar = 0.6*M_PI/180.0;  
+
+                Eigen::MatrixXf Lidar_matrix(3,3); //matrix  transformation between lidar and range image. It rotates the angles that it has of error with respect to the ground
+                Eigen::MatrixXf result(3,1);
+                Lidar_matrix <<   cos(ang_x_lidar) ,0                ,sin(ang_x_lidar),
+                                  0                ,1                ,0,
+                                  -sin(ang_x_lidar),0                ,cos(ang_x_lidar) ;
+
+
+                result << pc_x,
+                          pc_y,
+                          Zzi(i,j);
+                
+                result = Lidar_matrix*result;  // rotacion en eje X para correccion
+
+                point_cloud->points[num_pc].x = result(0);
+                point_cloud->points[num_pc].y = result(1);
+                point_cloud->points[num_pc].z = result(2);
+
+                cloud->push_back(point_cloud->points[num_pc]); 
+
+                num_pc++;
+              }
+            }
+        }  
+
+        //============================================================================================================
+
+        PointCloud::Ptr P_out (new PointCloud);
+      
+
+        P_out = cloud;
+
+
+        Eigen::MatrixXf RTlc(4,4); // translation matrix lidar-camera
+        RTlc<<   Rlc(0), Rlc(3) , Rlc(6) ,Tlc(0)
+                ,Rlc(1), Rlc(4) , Rlc(7) ,Tlc(1)
+                ,Rlc(2), Rlc(5) , Rlc(8) ,Tlc(2)
+                ,0       , 0        , 0  , 1    ;
+
+        //std::cout<<RTlc<<std::endl;
+
+        int size_inter_Lidar = (int) P_out->points.size();
+
+        Eigen::MatrixXf Lidar_camera(3,size_inter_Lidar);
+        Eigen::MatrixXf Lidar_cam(3,1);
+        Eigen::MatrixXf pc_matrix(4,1);
+        Eigen::MatrixXf pointCloud_matrix(4,size_inter_Lidar);
+
+        // unsigned int cols = in_image->width; 
+        // unsigned int rows = in_image->height; 
+
+        auto cols = imgWidth;
+        auto rows = imgHeight;
+
+        uint px_data = 0; uint py_data = 0;
+
+
+        pcl::PointXYZRGB point;
+
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr pc_color (new pcl::PointCloud<pcl::PointXYZRGB>);
+
+        //P_out = cloud_out;
+
+        for (int i = 0; i < size_inter_Lidar; i++)
+        {
+            pc_matrix(0,0) = -P_out->points[i].y;   
+            pc_matrix(1,0) = -P_out->points[i].z;   
+            pc_matrix(2,0) =  P_out->points[i].x;  
+            pc_matrix(3,0) = 1.0;
+
+            Lidar_cam = Mc * (RTlc * pc_matrix);
+
+            px_data = (int)(Lidar_cam(0,0)/Lidar_cam(2,0));
+            py_data = (int)(Lidar_cam(1,0)/Lidar_cam(2,0));
+            
+            if(px_data<0.0 || px_data>=cols || py_data<0.0 || py_data>=rows)
+                continue;
+
+            int color_dis_x = (int)(255*((P_out->points[i].x)/maxlen));
+            int color_dis_z = (int)(255*((P_out->points[i].x)/10.0));
+            if(color_dis_z>255)
+                color_dis_z = 255;
+
+
+            //point cloud con color
+            // cv::Vec3b & color = color_pcl->image.at<cv::Vec3b>(py_data,px_data);
+            cv::Vec3b & color = color_labeled_imgs.front().at<cv::Vec3b>(py_data,px_data);
+            
+            point.x = P_out->points[i].x;
+            point.y = P_out->points[i].y;
+            point.z = P_out->points[i].z;
+            
+
+            point.r = (int)color[2]; 
+            point.g = (int)color[1]; 
+            point.b = (int)color[0];
+
+            
+            pc_color->points.push_back(point);   
+            
+            // cv::circle(cv_ptr->image, cv::Point(px_data, py_data), 1, CV_RGB(255-color_dis_x,(int)(color_dis_z),color_dis_x),cv::FILLED);
+            cv::circle(semseg_labeled_imgs.front(), cv::Point(px_data, py_data), 1, CV_RGB(255-color_dis_x,(int)(color_dis_z),color_dis_x),cv::FILLED);
+          }
+          sensor_msgs::PointCloud2::Ptr pc_color_msg(new sensor_msgs::PointCloud2);
+          pc_color->is_dense = true;
+          pc_color->width = (int) pc_color->points.size();
+          pc_color->height = 1;
+          pc_color->header.frame_id = "base_imu_link";
+          pcl::toROSMsg(*pc_color, *pc_color_msg);
+          // pc_color_msg->header.stamp = in_pc2->header.stamp; //해결
+          pc_color_msg->header.stamp = pc_timestamps[idx];
+          pc_pub.publish(pc_color_msg);
+          ROS_INFO("all finish!!----------");
+
+        //----original code end-------
+
+
+        pc_timestamps.erase(pc_timestamps.begin(), pc_timestamps.begin() + idx + 1);
+        ZI_matrices.erase(ZI_matrices.begin(), ZI_matrices.begin() + idx + 1);
+        ZzI_matrices.erase(ZzI_matrices.begin(), ZzI_matrices.begin() + idx + 1);
+        Zout_matrices.erase(Zout_matrices.begin(), Zout_matrices.begin() + idx + 1);
+        img_timestamps.pop_front();
+        semseg_labeled_imgs.pop_front();
+        color_labeled_imgs.pop_front();
+      }
+
+      else {
+        // ROS_WARN("image timestamp faster than pointcloud timestamp ...waiting....");
+        continue;
+      }
+    }
 
 }
 
@@ -539,6 +611,11 @@ int main(int argc, char** argv)
   nh.getParam("/lidar/fov_down", FOV_DOWN);
   nh.getParam("/lidar/vert_scan", VERT_SCAN);
   nh.getParam("/lidar/horz_scan", HORZ_SCAN);
+
+  nh.getParam("/imgWidth", imgWidth);
+  nh.getParam("/imgHeight", imgHeight);
+  nh.getParam("/syncTime", syncTime);
+
   range_mat_.resize(VERT_SCAN, vector<Point>(HORZ_SCAN));
 
   nh.getParam("/save_synced", save_synced_);
@@ -569,21 +646,28 @@ int main(int argc, char** argv)
 
   color_map = getColorMap();
 
-  ros::Subscriber img_sub1 = nh.subscribe(imgTopic, 10, imgCallback);
-  ros::Subscriber pc_sub1 = nh.subscribe(pcTopic, 1, pcCallback);
+  ros::Subscriber img_sub = nh.subscribe(imgTopic, 10, imgCallback);
+  ros::Subscriber pc_sub = nh.subscribe(pcTopic, 1, pcCallback);
 
   
-  message_filters::Subscriber<PointCloud2> pc_sub(nh, pcTopic , 1);
-  message_filters::Subscriber<Image> img_sub(nh, imgTopic, 10);
+  // message_filters::Subscriber<PointCloud2> pc_sub(nh, pcTopic , 1);
+  // message_filters::Subscriber<Image> img_sub(nh, imgTopic, 10);
 
-  typedef sync_policies::ApproximateTime<PointCloud2, Image> MySyncPolicy;
-  Synchronizer<MySyncPolicy> sync(MySyncPolicy(10), pc_sub, img_sub); //10
-  sync.registerCallback(boost::bind(&callback, _1, _2));
+  // typedef sync_policies::ApproximateTime<PointCloud2, Image> MySyncPolicy;
+  // Synchronizer<MySyncPolicy> sync(MySyncPolicy(10), pc_sub, img_sub); //10
+  // sync.registerCallback(boost::bind(&callback, _1, _2));
   pcOnimg_pub = nh.advertise<sensor_msgs::Image>("/pcOnImage_image", 1);
   rangeImage = boost::shared_ptr<pcl::RangeImageSpherical>(new pcl::RangeImageSpherical);
 
   pc_pub = nh.advertise<PointCloud> ("/dreamstep_colored_body", 1);  
   range_image_pub = nh.advertise<sensor_msgs::Image>("/range_image", 1);
 
-  ros::spin();
+  // ros::spin();
+  ros::Rate loop_rate(10);
+  while (ros::ok())
+  {
+      ros::spinOnce();
+      reconstruct3D(); 
+      loop_rate.sleep();
+  }
 }
