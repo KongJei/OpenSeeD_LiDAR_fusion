@@ -98,6 +98,8 @@ class OpenSeeDProcessor:
 
         # result_image = Image.fromarray(demo.get_image())
         semseg_labeled_msg = self.bridge.cv2_to_imgmsg(semseg_labeled_image, encoding="mono8")
+        semseg_labeled_msg.header.stamp = msg.header.stamp
+        semseg_labeled_msg.header.frame_id = msg.header.frame_id
         self.pub_semseg_labeled_img.publish(semseg_labeled_msg)
         
     def create_label_index_image(self, sem_seg):

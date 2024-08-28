@@ -124,8 +124,9 @@ std::deque<ros::Time> pc_timestamps;
 
 int imgWidth, imgHeight; // assume not change
 double syncTime;
-
-
+int max_vec_size;
+double node_rate;
+int debug = 0;
 
 float getRange(pcl::PointXYZI point)
 {
@@ -176,27 +177,35 @@ void sphericalProjection(PointCloud::Ptr cloud, std::vector<vector<Point>>& rang
 
 void imgCallback(const sensor_msgs::ImageConstPtr& in_image)
 {
-  ROS_INFO("semantic segmented img received!!!-------");
+  // ROS_INFO("semantic segmented img received!!!-------");
 
   cv_bridge::CvImagePtr cv_ptr;
   try
   {
       cv_ptr = cv_bridge::toCvCopy(in_image, sensor_msgs::image_encodings::MONO8);
       cv::Mat semseg_labeled_img = cv_ptr->image;
+      // std::cout << "semseg_labeled_img type: " << semseg_labeled_img.type() << std::endl;
 
       // color_labeled_img = cv::Mat(semseg_labeled_img.size(), CV_8UC3, cv::Scalar(0, 0, 0));
       cv::Mat color_labeled_img(semseg_labeled_img.size(), CV_8UC3, cv::Scalar(0, 0, 0));
       for (int y = 0; y < semseg_labeled_img.rows; ++y) {
           for (int x = 0; x < semseg_labeled_img.cols; ++x) {
-              int label = semseg_labeled_img.at<int>(y, x);
+              uchar label = semseg_labeled_img.at<uchar>(y, x);
               if (label < color_map.size()) {
                   color_labeled_img.at<cv::Vec3b>(y, x) = color_map[label];
-                  // std::cout<<"label :     "<<label<<"-----------"<<std::endl;
+                  // std::cout << "label: " << static_cast<int>(label) << std::endl;
+
               } else {
                   color_labeled_img.at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 0); // 레이블이 색상 맵의 범위를 벗어난 경우 검정색으로 설정
               }
+              if (debug % 1000 == 0) {
+                ROS_INFO("imgcallback-----last pixel label: %d", static_cast<int>(label));
+              }
+              debug++;
           }
       }
+
+      // cv::imwrite("/home/url/ros1_cuda_docker/openseed_img2pc_generator_ws/src/OpenSeeD_LiDAR_fusion/color_labeled_img.png", color_labeled_img);
 
       semseg_labeled_imgs.push_back(semseg_labeled_img);
       color_labeled_imgs.push_back(color_labeled_img);
@@ -216,7 +225,7 @@ void imgCallback(const sensor_msgs::ImageConstPtr& in_image)
 
 void pcCallback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2)
 {
-  ROS_INFO("pointcloud received!!!-----------------");
+  // ROS_INFO("pointcloud received!!!-----------------");
 
   //Conversion from sensor_msgs::PointCloud2 to pcl::PointCloud<T>
   pcl::PCLPointCloud2 pcl_pc2;
@@ -387,7 +396,16 @@ void pcCallback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2)
   Zout_matrices.push_back(Zout);
   pc_timestamps.push_back(in_pc2->header.stamp);
 
-  
+  if (pc_timestamps.size() > max_vec_size)
+  {
+    ZI_matrices.pop_front();
+    ZzI_matrices.pop_front();
+    Zout_matrices.pop_front();
+    pc_timestamps.pop_front();
+  }
+
+  // cv::imwrite("/home/url/ros1_cuda_docker/openseed_img2pc_generator_ws/src/OpenSeeD_LiDAR_fusion/range_img.png", cv_range_image);
+
   range_image_pub.publish(cv_range_image->toImageMsg());
 }
 
@@ -403,19 +421,21 @@ void reconstruct3D()
   //============================================================================================================
   while (!semseg_labeled_imgs.empty())
     {
+
       if (ZI_matrices.empty()) continue;
 
       ros::Time img_time = img_timestamps.front();
 
       auto it = std::find_if(pc_timestamps.begin(), pc_timestamps.end(), 
           [&](const ros::Time& pc_time) {
+              // ROS_INFO("img_time: %f, pc_time: %f, diff: %f", img_time.toSec(), pc_time.toSec(), fabs((img_time - pc_time).toSec()));
               return fabs((img_time - pc_time).toSec()) < syncTime;
         });
 
       if (it != pc_timestamps.end())
       {
         auto idx = std::distance(pc_timestamps.begin(), it);
-
+        // ROS_INFO("3-------idx: %d", idx);
         //--- origin code----
         PointCloud::Ptr point_cloud (new PointCloud);
         PointCloud::Ptr cloud (new PointCloud);
@@ -474,7 +494,7 @@ void reconstruct3D()
               }
             }
         }  
-
+        // ROS_INFO("4--------num_pc: %d", num_pc);
         //============================================================================================================
 
         PointCloud::Ptr P_out (new PointCloud);
@@ -512,65 +532,68 @@ void reconstruct3D()
         pcl::PointCloud<pcl::PointXYZRGB>::Ptr pc_color (new pcl::PointCloud<pcl::PointXYZRGB>);
 
         //P_out = cloud_out;
-
+        // ROS_INFO("5--------size_inter_Lidar: %d", size_inter_Lidar);
         for (int i = 0; i < size_inter_Lidar; i++)
         {
-            pc_matrix(0,0) = -P_out->points[i].y;   
-            pc_matrix(1,0) = -P_out->points[i].z;   
-            pc_matrix(2,0) =  P_out->points[i].x;  
-            pc_matrix(3,0) = 1.0;
+          pc_matrix(0,0) = -P_out->points[i].y;   
+          pc_matrix(1,0) = -P_out->points[i].z;   
+          pc_matrix(2,0) =  P_out->points[i].x;  
+          pc_matrix(3,0) = 1.0;
 
-            Lidar_cam = Mc * (RTlc * pc_matrix);
+          Lidar_cam = Mc * (RTlc * pc_matrix);
 
-            px_data = (int)(Lidar_cam(0,0)/Lidar_cam(2,0));
-            py_data = (int)(Lidar_cam(1,0)/Lidar_cam(2,0));
-            
-            if(px_data<0.0 || px_data>=cols || py_data<0.0 || py_data>=rows)
-                continue;
-
-            int color_dis_x = (int)(255*((P_out->points[i].x)/maxlen));
-            int color_dis_z = (int)(255*((P_out->points[i].x)/10.0));
-            if(color_dis_z>255)
-                color_dis_z = 255;
+          px_data = (int)(Lidar_cam(0,0)/Lidar_cam(2,0));
+          py_data = (int)(Lidar_cam(1,0)/Lidar_cam(2,0));
+          
+          if(px_data<0.0 || px_data>=cols || py_data<0.0 || py_data>=rows)
+              continue;
 
 
-            //point cloud con color
-            // cv::Vec3b & color = color_pcl->image.at<cv::Vec3b>(py_data,px_data);
-            cv::Vec3b & color = color_labeled_imgs.front().at<cv::Vec3b>(py_data,px_data);
-            
-            point.x = P_out->points[i].x;
-            point.y = P_out->points[i].y;
-            point.z = P_out->points[i].z;
-            
+          int color_dis_x = (int)(255*((P_out->points[i].x)/maxlen));
+          int color_dis_z = (int)(255*((P_out->points[i].x)/10.0));
+          if(color_dis_z>255)
+              color_dis_z = 255;
 
-            point.r = (int)color[2]; 
-            point.g = (int)color[1]; 
-            point.b = (int)color[0];
 
-            
-            pc_color->points.push_back(point);   
-            
-            // cv::circle(cv_ptr->image, cv::Point(px_data, py_data), 1, CV_RGB(255-color_dis_x,(int)(color_dis_z),color_dis_x),cv::FILLED);
-            cv::circle(semseg_labeled_imgs.front(), cv::Point(px_data, py_data), 1, CV_RGB(255-color_dis_x,(int)(color_dis_z),color_dis_x),cv::FILLED);
-          }
-          sensor_msgs::PointCloud2::Ptr pc_color_msg(new sensor_msgs::PointCloud2);
-          pc_color->is_dense = true;
-          pc_color->width = (int) pc_color->points.size();
-          pc_color->height = 1;
-          pc_color->header.frame_id = "base_imu_link";
-          pcl::toROSMsg(*pc_color, *pc_color_msg);
-          // pc_color_msg->header.stamp = in_pc2->header.stamp; //해결
-          pc_color_msg->header.stamp = pc_timestamps[idx];
-          pc_pub.publish(pc_color_msg);
-          ROS_INFO("all finish!!----------");
+          //point cloud con color
+          // cv::Vec3b & color = color_pcl->image.at<cv::Vec3b>(py_data,px_data);
+          cv::Vec3b & color = color_labeled_imgs.front().at<cv::Vec3b>(py_data,px_data);
+          
+          point.x = P_out->points[i].x;
+          point.y = P_out->points[i].y;
+          point.z = P_out->points[i].z;
+          
+
+          point.r = (int)color[2]; 
+          point.g = (int)color[1]; 
+          point.b = (int)color[0];
+
+          
+          pc_color->points.push_back(point);   
+          
+          // cv::circle(cv_ptr->image, cv::Point(px_data, py_data), 1, CV_RGB(255-color_dis_x,(int)(color_dis_z),color_dis_x),cv::FILLED);
+          cv::circle(semseg_labeled_imgs.front(), cv::Point(px_data, py_data), 1, CV_RGB(255-color_dis_x,(int)(color_dis_z),color_dis_x),cv::FILLED);
+        }
+        ROS_WARN("6--------pc_color->points.size: %d", (int)pc_color->points.size());
+        
+        sensor_msgs::PointCloud2::Ptr pc_color_msg(new sensor_msgs::PointCloud2);
+        pc_color->is_dense = true;
+        pc_color->width = (int) pc_color->points.size();
+        pc_color->height = 1;
+        pc_color->header.frame_id = "base_imu_link";
+        pcl::toROSMsg(*pc_color, *pc_color_msg);
+        // pc_color_msg->header.stamp = in_pc2->header.stamp; //해결
+        pc_color_msg->header.stamp = pc_timestamps[idx];
+        pc_pub.publish(pc_color_msg);
+        // ROS_INFO("all finish!!----------");
 
         //----original code end-------
 
 
-        pc_timestamps.erase(pc_timestamps.begin(), pc_timestamps.begin() + idx + 1);
-        ZI_matrices.erase(ZI_matrices.begin(), ZI_matrices.begin() + idx + 1);
-        ZzI_matrices.erase(ZzI_matrices.begin(), ZzI_matrices.begin() + idx + 1);
-        Zout_matrices.erase(Zout_matrices.begin(), Zout_matrices.begin() + idx + 1);
+        // pc_timestamps.erase(pc_timestamps.begin(), pc_timestamps.begin() + idx + 1);
+        // ZI_matrices.erase(ZI_matrices.begin(), ZI_matrices.begin() + idx + 1);
+        // ZzI_matrices.erase(ZzI_matrices.begin(), ZzI_matrices.begin() + idx + 1);
+        // Zout_matrices.erase(Zout_matrices.begin(), Zout_matrices.begin() + idx + 1);
         img_timestamps.pop_front();
         semseg_labeled_imgs.pop_front();
         color_labeled_imgs.pop_front();
@@ -615,6 +638,8 @@ int main(int argc, char** argv)
   nh.getParam("/imgWidth", imgWidth);
   nh.getParam("/imgHeight", imgHeight);
   nh.getParam("/syncTime", syncTime);
+  nh.getParam("/max_vec_size", max_vec_size);
+  nh.getParam("/node_rate", node_rate);
 
   range_mat_.resize(VERT_SCAN, vector<Point>(HORZ_SCAN));
 
@@ -663,7 +688,7 @@ int main(int argc, char** argv)
   range_image_pub = nh.advertise<sensor_msgs::Image>("/range_image", 1);
 
   // ros::spin();
-  ros::Rate loop_rate(10);
+  ros::Rate loop_rate(node_rate);
   while (ros::ok())
   {
       ros::spinOnce();

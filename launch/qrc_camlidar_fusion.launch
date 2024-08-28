@@ -19,7 +19,9 @@
 
     <param name="imgWidth" type="int" value="640" />
     <param name="imgHeight" type="int" value="480" />
-    <param name="syncTime" type="double" value="1.0" /> 
+    <param name="syncTime" type="double" value="1.2" />
+    <param name="max_vec_size" type="int" value="1000" />
+    <param name="node_rate" type="double" value="10.0" />
 
     <param name="/lidar/fov_up"        type="double" value="90.0" />
     <param name="/lidar/fov_down"        type="double" value="-90.0" />
