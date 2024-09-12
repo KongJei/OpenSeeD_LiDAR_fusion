@@ -93,6 +93,7 @@ std::vector<vector<Point>> range_mat_;
 // input topics 
 std::string imgTopic = "/go1_d435/infra1/image_rect_raw";
 std::string pcTopic = "/dreamstep_cloud_body";
+std::string odomTopic = "/odom";
 
 //matrix calibration lidar and camera
 
@@ -127,6 +128,7 @@ double syncTime;
 int max_vec_size;
 double node_rate;
 int debug = 0;
+string pc_frame_id;
 
 float getRange(pcl::PointXYZI point)
 {
@@ -177,7 +179,6 @@ void sphericalProjection(PointCloud::Ptr cloud, std::vector<vector<Point>>& rang
 
 void imgCallback(const sensor_msgs::ImageConstPtr& in_image)
 {
-  // ROS_INFO("semantic segmented img received!!!-------");
 
   cv_bridge::CvImagePtr cv_ptr;
   try
@@ -198,10 +199,10 @@ void imgCallback(const sensor_msgs::ImageConstPtr& in_image)
               } else {
                   color_labeled_img.at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 0); // 레이블이 색상 맵의 범위를 벗어난 경우 검정색으로 설정
               }
-              if (debug % 1000 == 0) {
-                ROS_INFO("imgcallback-----last pixel label: %d", static_cast<int>(label));
-              }
-              debug++;
+              // if (debug % 1000 == 0) {
+                // ROS_INFO("imgcallback-----last pixel label: %d", static_cast<int>(label));
+              // }
+              // debug++;
           }
       }
 
@@ -211,7 +212,14 @@ void imgCallback(const sensor_msgs::ImageConstPtr& in_image)
       color_labeled_imgs.push_back(color_labeled_img);
       img_timestamps.push_back(in_image->header.stamp);
 
-      pcOnimg_pub.publish(cv_ptr->toImageMsg());
+      cv::Mat normalized_img;
+      cv::normalize(cv_ptr->image, normalized_img, 0, 255, cv::NORM_MINMAX);
+
+      cv_bridge::CvImage cv_img_normalized;
+      cv_img_normalized.header = in_image->header; 
+      cv_img_normalized.encoding = sensor_msgs::image_encodings::MONO8;
+      cv_img_normalized.image = normalized_img;
+      pcOnimg_pub.publish(cv_img_normalized.toImageMsg());
 
   }
   catch (cv_bridge::Exception& e)
@@ -219,13 +227,14 @@ void imgCallback(const sensor_msgs::ImageConstPtr& in_image)
       ROS_ERROR("cv_bridge exception: %s", e.what());
       return;
   }
+  // ROS_INFO("semantic segmented img received!!!-------");
 
 
 }
 
 void pcCallback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2)
 {
-  // ROS_INFO("pointcloud received!!!-----------------");
+    // ROS_INFO("pointcloud received!!!, pc size: %d", in_pc2->width * in_pc2->height);
 
   //Conversion from sensor_msgs::PointCloud2 to pcl::PointCloud<T>
   pcl::PCLPointCloud2 pcl_pc2;
@@ -281,6 +290,8 @@ void pcCallback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2)
 
   int cols_img = rangeImage->width;
   int rows_img = rangeImage->height;
+  // ROS_INFO("cloud out size: %d, cols_img: %d, rows_img: %d", cloud_out->points.size(), cols_img, rows_img);
+  if (cols_img == 0 || rows_img == 0) return; // j added
 
   std::for_each(range_mat_.begin(), range_mat_.end(), [](vector<Point>& inner_vec) {
                     std::fill(inner_vec.begin(), inner_vec.end(), Point());
@@ -303,13 +314,15 @@ void pcCallback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2)
  
   for (int i=0; i< cols_img; ++i)
       for (int j=0; j<rows_img ; ++j)
-      {
+      { 
+        // ROS_INFO(RangeImage->get);
         float r =  rangeImage->getPoint(i, j).range; //range_mat_[j][i].range; 
         float zz = rangeImage->getPoint(i, j).z; //range_mat_[j][i].z;
        
        // Eigen::Vector3f tmp_point;
         //rangeImage->calculate3DPoint (float(i), float(j), r, tmp_point);
         if(std::isinf(r) || r<minlen || r>maxlen || std::isnan(zz)){
+            // ROS_INFO("range pixel is out of bound! r: %f, zz: %f", r, zz);
             continue;
         }             
         Z.at(j,i) = r;   
@@ -322,6 +335,9 @@ void pcCallback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2)
   cv_bridge::CvImagePtr cv_range_image(new cv_bridge::CvImage);
   cv_range_image->encoding = sensor_msgs::image_encodings::TYPE_32FC1;
   cv_range_image->image = range_image;
+
+  range_image_pub.publish(cv_range_image->toImageMsg());
+
 
   ////////////////////////////////////////////// interpolation
   //============================================================================================================
@@ -338,6 +354,8 @@ void pcCallback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2)
   arma::mat ZI_near;  
   arma::mat ZI;
   arma::mat ZzI;
+
+  
 
   arma::interp2(X, Y, Z, XI, YI, ZI,"lineal");  
   arma::interp2(X, Y, Zz, XI, YI, ZzI,"lineal");
@@ -406,7 +424,9 @@ void pcCallback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2)
 
   // cv::imwrite("/home/url/ros1_cuda_docker/openseed_img2pc_generator_ws/src/OpenSeeD_LiDAR_fusion/range_img.png", cv_range_image);
 
-  range_image_pub.publish(cv_range_image->toImageMsg());
+
+  // ROS_INFO("pointcloud received!!!-----------------");
+
 }
 
 // void callback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2 , const sensor_msgs::ImageConstPtr& in_image)
@@ -435,6 +455,7 @@ void reconstruct3D()
       if (it != pc_timestamps.end())
       {
         auto idx = std::distance(pc_timestamps.begin(), it);
+        // auto t2 = t1 + 1;
         // ROS_INFO("3-------idx: %d", idx);
         //--- origin code----
         PointCloud::Ptr point_cloud (new PointCloud);
@@ -574,13 +595,13 @@ void reconstruct3D()
           // cv::circle(cv_ptr->image, cv::Point(px_data, py_data), 1, CV_RGB(255-color_dis_x,(int)(color_dis_z),color_dis_x),cv::FILLED);
           cv::circle(semseg_labeled_imgs.front(), cv::Point(px_data, py_data), 1, CV_RGB(255-color_dis_x,(int)(color_dis_z),color_dis_x),cv::FILLED);
         }
-        ROS_WARN("6--------pc_color->points.size: %d", (int)pc_color->points.size());
+        // ROS_WARN("6--------pc_color->points.size: %d", (int)pc_color->points.size());
         
         sensor_msgs::PointCloud2::Ptr pc_color_msg(new sensor_msgs::PointCloud2);
         pc_color->is_dense = true;
         pc_color->width = (int) pc_color->points.size();
         pc_color->height = 1;
-        pc_color->header.frame_id = "base_imu_link";
+        pc_color->header.frame_id = pc_frame_id;
         pcl::toROSMsg(*pc_color, *pc_color_msg);
         // pc_color_msg->header.stamp = in_pc2->header.stamp; //해결
         pc_color_msg->header.stamp = pc_timestamps[idx];
@@ -597,6 +618,8 @@ void reconstruct3D()
         img_timestamps.pop_front();
         semseg_labeled_imgs.pop_front();
         color_labeled_imgs.pop_front();
+
+
       }
 
       else {
@@ -604,7 +627,7 @@ void reconstruct3D()
         continue;
       }
     }
-
+  // ROS_INFO("all finish!!----------");
 }
 
 int main(int argc, char** argv)
@@ -622,6 +645,7 @@ int main(int argc, char** argv)
   nh.getParam("/min_ang_FOV", min_FOV);
   nh.getParam("/pcTopic", pcTopic);
   nh.getParam("/imgTopic", imgTopic);
+  nh.getParam("/odomTopic", odomTopic);
   nh.getParam("/max_var", max_var);  
   nh.getParam("/filter_output_pc", f_pc);
 
@@ -640,6 +664,8 @@ int main(int argc, char** argv)
   nh.getParam("/syncTime", syncTime);
   nh.getParam("/max_vec_size", max_vec_size);
   nh.getParam("/node_rate", node_rate);
+
+  nh.getParam("/pcFrameId", pc_frame_id);
 
   range_mat_.resize(VERT_SCAN, vector<Point>(HORZ_SCAN));
 
@@ -672,7 +698,8 @@ int main(int argc, char** argv)
   color_map = getColorMap();
 
   ros::Subscriber img_sub = nh.subscribe(imgTopic, 10, imgCallback);
-  ros::Subscriber pc_sub = nh.subscribe(pcTopic, 1, pcCallback);
+  ros::Subscriber pc_sub = nh.subscribe(pcTopic, 100000, pcCallback);
+  // ros::Subscriber odom_sub = nh.subscribe(odomTopic, 1, odomCallback);
 
   
   // message_filters::Subscriber<PointCloud2> pc_sub(nh, pcTopic , 1);
