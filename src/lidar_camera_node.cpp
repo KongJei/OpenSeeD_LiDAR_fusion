@@ -199,12 +199,13 @@ void imgCallback(const sensor_msgs::ImageConstPtr& in_image)
               } else {
                   color_labeled_img.at<cv::Vec3b>(y, x) = cv::Vec3b(0, 0, 0); // 레이블이 색상 맵의 범위를 벗어난 경우 검정색으로 설정
               }
-              // if (debug % 1000 == 0) {
+              if (debug % 1000 == 0) {
                 // ROS_INFO("imgcallback-----last pixel label: %d", static_cast<int>(label));
-              // }
-              // debug++;
+              }
+              debug++;
           }
       }
+      usleep(10);
 
       // cv::imwrite("/home/url/ros1_cuda_docker/openseed_img2pc_generator_ws/src/OpenSeeD_LiDAR_fusion/color_labeled_img.png", color_labeled_img);
 
@@ -273,7 +274,6 @@ void pcCallback(const boost::shared_ptr<const sensor_msgs::PointCloud2>& in_pc2)
       cloud_out->push_back(cloud_in->points[i]); // cloud_out 에는 range 안에 들어오는 포인트만 삽입.
     
   }  
-
 
   // point cloud to image 
 
@@ -442,7 +442,9 @@ void reconstruct3D()
   while (!semseg_labeled_imgs.empty())
     {
 
-      if (ZI_matrices.empty()) continue;
+      if (ZI_matrices.empty()) {
+        ROS_INFO("z IS EMPTY waiting for pointcloud data...");
+        continue;}
 
       ros::Time img_time = img_timestamps.front();
 

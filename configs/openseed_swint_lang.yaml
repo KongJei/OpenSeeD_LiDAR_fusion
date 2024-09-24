@@ -18,7 +18,7 @@ OUTPUT_DIR: './output/p2' #'../../data/output/test'
 
 TEXT_CLASSES:
   THING: ['car','person','traffic light', 'truck', 'motorcycle']
-  STUFF: ['person','car','sky','building', 'bush', 'tree', 'street lamp']
+  STUFF: ['grass','gravel', 'tree','ground','sky','water', 'person','building']
   # STUFF: ['tree', 'bush', 'grass', 'building', 'sky', 'rock', 'person', 'street lamp', 'snow', 'pavement', 'car', 'water', 'bridge', 'bench', 'road', 'sign', 'scooter', 'bag', ]
   # , , , , , , , , bush
     # ['zebra','antelope','giraffe','ostrich']
